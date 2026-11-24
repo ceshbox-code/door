@@ -213,6 +213,11 @@ final class WorkRecordService
             throw new ApiException('VALIDATION_ERROR', 'Проверьте введённые данные', 422, ['status' => 'active, voided или all']);
         }
         $f = ['status' => $status];
+        $review = $query['review_status'] ?? 'all';
+        if (!in_array($review, ['pending', 'accepted', 'rejected', 'all'], true)) {
+            throw new ApiException('VALIDATION_ERROR', 'Проверьте введённые данные', 422, ['review_status' => 'pending, accepted, rejected или all']);
+        }
+        $f['review_status'] = $review;
 
         if (!Permissions::can($actor['role'], 'work.view_all')) {
             $f['user_id'] = (int) $actor['id'];           // исполнитель видит только собственные работы
@@ -253,7 +258,10 @@ final class WorkRecordService
         }
 
         [$rows, $total] = $this->records->search($f, $per, ($page - 1) * $per);
-        return ['items' => array_map([WorkRecord::class, 'present'], $rows), 'page' => $page, 'per_page' => $per, 'total' => $total];
+        return [
+            'items' => array_map([WorkRecord::class, 'present'], $rows), 'page' => $page, 'per_page' => $per, 'total' => $total,
+            'review_counts' => $this->records->reviewCounts($f),      // для вкладок «ждёт приёмки / принято / не принято»
+        ];
     }
 
     public function get(array $actor, int $id): array
@@ -263,7 +271,123 @@ final class WorkRecordService
         if ($row === null || (!Permissions::can($actor['role'], 'work.view_all') && (int) $row['user_id'] !== (int) $actor['id'])) {
             throw new ApiException('NOT_FOUND', 'Запись о работе не найдена', 404);
         }
-        return WorkRecord::present($row) + ['photos' => $this->photos->forRecordId($id)];
+        return WorkRecord::present($row) + ['photos' => $this->photos->forRecordId($id), 'reviews' => $this->presentReviews($id)];
+    }
+
+    private function presentReviews(int $id): array
+    {
+        return array_map(static fn(array $r): array => [
+            'action'     => $r['action'],
+            'reason'     => $r['reason'],
+            'can_fix'    => $r['can_fix'] === null ? null : (bool) (int) $r['can_fix'],
+            'created_at' => Dates::toIso($r['created_at']),
+            'actor'      => ['id' => (int) $r['actor_id'], 'full_name' => $r['actor_name']],
+        ], $this->records->reviews($id));
+    }
+
+    /** Приёмка: только из состояния «ждёт приёмки», строка блокируется — повторный клик или два директора не создадут двойного решения. */
+    public function accept(array $actor, int $id, string $ip): array
+    {
+        return Tx::run(function () use ($actor, $id, $ip) {
+            $row = $this->lockForReview($id, 'pending');
+            $now = Dates::nowUtc();
+            $this->records->markAccepted($id, (int) $actor['id'], $now);
+            $this->records->insertReview($id, 'accepted', (int) $actor['id'], null, null, $now);
+            $this->audit->log((int) $actor['id'], 'work_record.accept', 'work_record', $id,
+                ['review_status' => 'pending'], ['review_status' => 'accepted', 'total_amount' => $row['total_amount']], null, $ip);
+            return WorkRecord::present($this->records->findDetailed($id)) + ['reviews' => $this->presentReviews($id)];
+        });
+    }
+
+    /** Отклонение: причина обязательна, директор явно решает, можно ли исправить (can_fix). */
+    public function reject(array $actor, int $id, array $input, string $ip): array
+    {
+        $d = WorkRecordValidator::reject($input);
+        return Tx::run(function () use ($actor, $id, $d, $ip) {
+            $this->lockForReview($id, 'pending');
+            $now = Dates::nowUtc();
+            $this->records->markRejected($id, (int) $actor['id'], $now, $d['reason'], $d['can_fix']);
+            $this->records->insertReview($id, 'rejected', (int) $actor['id'], $d['reason'], $d['can_fix'], $now);
+            $this->audit->log((int) $actor['id'], 'work_record.reject', 'work_record', $id,
+                ['review_status' => 'pending'], ['review_status' => 'rejected', 'can_fix' => $d['can_fix']], $d['reason'], $ip);
+            return WorkRecord::present($this->records->findDetailed($id)) + ['reviews' => $this->presentReviews($id)];
+        });
+    }
+
+    /** Блокирует работу и проверяет, что решение по ней ещё можно принять. */
+    private function lockForReview(int $id, string $expected): array
+    {
+        $row = $id > 0 ? $this->records->lockRaw($id) : null;
+        if ($row === null) {
+            throw new ApiException('NOT_FOUND', 'Запись о работе не найдена', 404);
+        }
+        if ($row['voided_at'] !== null) {
+            throw new ApiException('ALREADY_VOIDED', 'Работа аннулирована, решение по ней принять нельзя', 409);
+        }
+        if ($row['review_status'] !== $expected) {
+            throw new ApiException('ALREADY_REVIEWED', 'Решение по этой работе уже принято или работа не ожидает приёмки', 409, ['review_status' => $row['review_status']]);
+        }
+        return $row;
+    }
+
+    /**
+     * Исправление отклонённой работы её исполнителем (только если директор разрешил — can_fix).
+     * Можно добавить фото, изменить количество (сумма пересчитывается по ЗАФИКСИРОВАННОЙ цене работы) и комментарий.
+     * Вид работы и дверь не меняются. После отправки работа снова ждёт приёмки; прежние фото и решение сохраняются.
+     *
+     * @param array<int,array{name:string,tmp_name:string,size:int,error:int}> $uploads
+     */
+    public function resubmit(array $actor, int $id, array $input, array $uploads, string $ip): array
+    {
+        $d = WorkRecordValidator::resubmit($input);
+        $staged = $uploads ? $this->storage->stage($this->storage->prepare($uploads)) : [];
+        $placed = [];
+        try {
+            return Tx::run(function () use ($actor, $id, $d, $ip, $staged, &$placed) {
+                $this->storage->discard($placed);
+                $placed = [];
+
+                $row = $id > 0 ? $this->records->lockRaw($id) : null;
+                // Чужую работу не раскрываем даже фактом существования
+                if ($row === null || (int) $row['user_id'] !== (int) $actor['id']) {
+                    throw new ApiException('NOT_FOUND', 'Запись о работе не найдена', 404);
+                }
+                if ($row['voided_at'] !== null) {
+                    throw new ApiException('ALREADY_VOIDED', 'Работа аннулирована', 409);
+                }
+                if ($row['review_status'] !== 'rejected') {
+                    throw new ApiException('NOT_REJECTED', 'Исправлять можно только отклонённую работу', 409, ['review_status' => $row['review_status']]);
+                }
+                if (!(int) $row['can_fix']) {
+                    throw new ApiException('FIX_NOT_ALLOWED', 'Директор не разрешил исправление этой работы. При необходимости зарегистрируйте работу заново.', 409);
+                }
+
+                $quantity = $d['quantity'] ?? (string) $row['quantity'];
+                $comment = $d['has_comment'] ? $d['comment'] : $row['comment'];
+                $changed = $staged !== [] || bccomp($quantity, (string) $row['quantity'], 3) !== 0 || $comment !== $row['comment'];
+                if (!$changed) {
+                    throw new ApiException('NOTHING_CHANGED', 'Для повторной отправки добавьте фото, измените количество или комментарий', 422);
+                }
+                $total = Money::multiply($quantity, (string) $row['unit_price']);
+
+                $this->records->markResubmitted($id, $quantity, $total, $comment);
+                if ($staged) {
+                    $this->photos->attach($id, $staged, $placed);
+                }
+                $now = Dates::nowUtc();
+                $this->records->insertReview($id, 'resubmitted', (int) $actor['id'], $comment, null, $now);
+                $this->audit->log((int) $actor['id'], 'work_record.resubmit', 'work_record', $id,
+                    ['review_status' => 'rejected', 'quantity' => $row['quantity'], 'total_amount' => $row['total_amount']],
+                    ['review_status' => 'pending', 'quantity' => $quantity, 'total_amount' => $total, 'new_photos' => count($staged)], null, $ip);
+                return WorkRecord::present($this->records->findDetailed($id))
+                    + ['photos' => $this->photos->forRecordId($id), 'reviews' => $this->presentReviews($id)];
+            });
+        } catch (Throwable $e) {
+            $this->storage->discard($placed);
+            throw $e;
+        } finally {
+            $this->storage->discardStaged($staged);
+        }
     }
 
     public function void(array $actor, int $id, array $input, string $ip): array

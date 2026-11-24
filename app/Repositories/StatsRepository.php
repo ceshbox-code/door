@@ -5,7 +5,7 @@ namespace App\Repositories;
 
 use App\Core\Database;
 
-/** Агрегаты по действующим (не аннулированным) работам. Деньги и количества возвращаются DECIMAL-строками. */
+/** Агрегаты по принятым и не аннулированным работам (ТЗ 2.1). Деньги и количества возвращаются DECIMAL-строками. */
 final class StatsRepository
 {
     /** @return array{0:string,1:array} */
@@ -14,7 +14,7 @@ final class StatsRepository
         if (!empty($f['door_missing'])) {
             return [' WHERE 1 = 0', []];
         }
-        $w = ['wr.voided_at IS NULL'];
+        $w = [\App\Helpers\Accrual::SQL];
         $a = [];
         if (!empty($f['from_utc'])) {
             $w[] = 'wr.completed_at >= ?';

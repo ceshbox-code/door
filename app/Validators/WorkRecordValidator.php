@@ -82,4 +82,49 @@ final class WorkRecordValidator
         }
         return $r;
     }
+
+    /** Отклонение работы: причина обязательна, решение «можно ли исправить» принимается явно (без значения по умолчанию). */
+    public static function reject(array $in): array
+    {
+        $reason = Input::str($in['reason'] ?? null);
+        $e = [];
+        if ($reason === null || mb_strlen($reason) < 3 || mb_strlen($reason) > 1000) {
+            $e['reason'] = 'Причина: от 3 до 1000 символов';
+        }
+        $canFix = array_key_exists('can_fix', $in) ? Input::bool($in['can_fix']) : null;
+        if ($canFix === null) {
+            $e['can_fix'] = 'Укажите, можно ли исправить работу: true или false';
+        }
+        if ($e) {
+            Validation::fail($e);
+        }
+        return ['reason' => $reason, 'can_fix' => $canFix];
+    }
+
+    /** Исправление отклонённой работы: количество и комментарий необязательны (меняется только переданное). */
+    public static function resubmit(array $in): array
+    {
+        $e = [];
+        $quantity = null;
+        if (array_key_exists('quantity', $in) && $in['quantity'] !== '') {
+            $quantity = Money::quantity($in['quantity']);
+            if ($quantity === null || !Money::isPositive($quantity)) {
+                $e['quantity'] = 'Количество: положительное число, до 3 знаков после запятой, до 99999.999';
+            }
+        }
+        $comment = null;
+        $hasComment = array_key_exists('comment', $in);
+        if ($hasComment) {
+            $c = Input::str($in['comment']);
+            if ($c === null || mb_strlen($c) > 2000) {
+                $e['comment'] = 'Комментарий: до 2000 символов';
+            } else {
+                $comment = $c === '' ? null : $c;
+            }
+        }
+        if ($e) {
+            Validation::fail($e);
+        }
+        return ['quantity' => $quantity, 'comment' => $comment, 'has_comment' => $hasComment];
+    }
 }

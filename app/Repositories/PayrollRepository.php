@@ -74,7 +74,7 @@ final class PayrollRepository
     {
         $st = Database::pdo()->prepare(
             'SELECT wr.id FROM work_records wr
-             WHERE wr.user_id = ? AND wr.voided_at IS NULL AND wr.completed_at >= ? AND wr.completed_at < ?
+             WHERE wr.user_id = ? AND wr.voided_at IS NULL AND wr.review_status = \'accepted\' AND wr.completed_at >= ? AND wr.completed_at < ?
                AND NOT EXISTS (SELECT 1 FROM payroll_run_items pri WHERE pri.work_record_id = wr.id AND pri.is_active = 1)
              ORDER BY wr.completed_at, wr.id FOR UPDATE'
         );
@@ -87,7 +87,7 @@ final class PayrollRepository
     {
         $st = Database::pdo()->prepare(
             'SELECT COUNT(*) FROM work_records wr
-             WHERE wr.user_id = ? AND wr.voided_at IS NULL AND wr.completed_at >= ? AND wr.completed_at < ?
+             WHERE wr.user_id = ? AND wr.voided_at IS NULL AND wr.review_status = \'accepted\' AND wr.completed_at >= ? AND wr.completed_at < ?
                AND EXISTS (SELECT 1 FROM payroll_run_items pri WHERE pri.work_record_id = wr.id AND pri.is_active = 1)'
         );
         $st->execute([$userId, $fromUtc, $toUtc]);

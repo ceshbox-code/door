@@ -8,11 +8,12 @@ use PHPUnit\Framework\TestCase;
 
 final class PermissionsTest extends TestCase
 {
-    public function testOwnerHasEverything(): void
+    public function testOwnerHasEverythingExceptDirectorOnlyManagement(): void
     {
         foreach (Permissions::ALL as $p) {
-            $this->assertTrue(Permissions::can('owner', $p), $p);
+            $this->assertSame(!in_array($p, Permissions::OWNER_EXCLUDED, true), Permissions::can('owner', $p), $p);
         }
+        $this->assertSame(['work_types.manage', 'rates.manage', 'finance.manage'], Permissions::OWNER_EXCLUDED);
     }
 
     public function testMasterCanRegisterButNotManageFinanceOrUsers(): void
@@ -29,7 +30,7 @@ final class PermissionsTest extends TestCase
         foreach (['stats.view', 'reports.export', 'finance.view_all', 'photos.view', 'work.view_all'] as $p) {
             $this->assertTrue(Permissions::can('director', $p), $p);
         }
-        foreach (['work.register', 'rates.manage', 'finance.manage', 'users.manage', 'work.void'] as $p) {
+        foreach (['work.register', 'users.manage', 'work.void'] as $p) {
             $this->assertFalse(Permissions::can('director', $p), $p);
         }
     }
@@ -70,9 +71,11 @@ final class PermissionsTest extends TestCase
 
     public function testFinanceMatrix(): void
     {
-        $this->assertTrue(Permissions::can('owner', 'finance.manage'));
+        // финансовые операции создаёт и изменяет только директор; администратор и мастер — нет
+        $this->assertTrue(Permissions::can('director', 'finance.manage'));
         $this->assertTrue(Permissions::can('director', 'finance.view_all'));
-        $this->assertFalse(Permissions::can('director', 'finance.manage'));
+        $this->assertTrue(Permissions::can('owner', 'finance.view_all'));
+        $this->assertFalse(Permissions::can('owner', 'finance.manage'));
         $this->assertTrue(Permissions::can('master', 'finance.view_own'));
         $this->assertFalse(Permissions::can('master', 'finance.view_all'));
         $this->assertFalse(Permissions::can('master', 'finance.manage'));
@@ -86,5 +89,29 @@ final class PermissionsTest extends TestCase
         }
         $this->assertFalse(Permissions::can('master', 'stats.view'));
         $this->assertFalse(Permissions::can('master', 'reports.export'));
+    }
+
+    public function testAuditLogIsOwnerOnly(): void
+    {
+        $this->assertTrue(Permissions::can('owner', 'audit.view'));
+        $this->assertFalse(Permissions::can('director', 'audit.view'));
+        $this->assertFalse(Permissions::can('master', 'audit.view'));
+    }
+
+    public function testOnlyDirectorSetsRatesAndWorkTypes(): void
+    {
+        // директор устанавливает и видит
+        foreach (['rates.manage', 'rates.view', 'work_types.manage', 'work_types.view_all'] as $p) {
+            $this->assertTrue(Permissions::can('director', $p), $p);
+        }
+        // администратор только просматривает
+        foreach (['rates.view', 'work_types.view_all'] as $p) {
+            $this->assertTrue(Permissions::can('owner', $p), $p);
+        }
+        foreach (['rates.manage', 'work_types.manage'] as $p) {
+            $this->assertFalse(Permissions::can('owner', $p), $p);
+            $this->assertFalse(Permissions::can('master', $p), $p);
+        }
+        $this->assertFalse(Permissions::can('master', 'rates.view'));
     }
 }

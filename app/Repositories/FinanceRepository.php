@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace App\Repositories;
 
 use App\Core\Database;
+use App\Helpers\Accrual;
 
 /** Чтение финансовых показателей. Деньги — только DECIMAL-строки, арифметику выполняет Money (bcmath). */
 final class FinanceRepository
@@ -33,7 +34,7 @@ final class FinanceRepository
                  WHERE p.status = 'posted' AND p.user_id = ?
                  GROUP BY pa.work_record_id
              ) x ON x.work_record_id = wr.id
-             WHERE wr.user_id = ? AND wr.voided_at IS NULL
+             WHERE wr.user_id = ? AND " . Accrual::SQL . "
                AND wr.total_amount - COALESCE(x.paid, 0) > 0 {$runSql}
              ORDER BY wr.completed_at, wr.id"
         );
@@ -72,8 +73,8 @@ final class FinanceRepository
                              OR EXISTS (SELECT 1 FROM payments pp WHERE pp.user_id = u.id))";
         }
         $sql = "SELECT u.id AS user_id, u.full_name, u.role, u.is_active,
-                  COALESCE((SELECT SUM(wr.total_amount) FROM work_records wr WHERE wr.user_id = u.id AND wr.voided_at IS NULL{$acc}), 0) AS accrued,
-                  (SELECT COUNT(*) FROM work_records wr WHERE wr.user_id = u.id AND wr.voided_at IS NULL{$acc}) AS works_count,
+                  COALESCE((SELECT SUM(wr.total_amount) FROM work_records wr WHERE wr.user_id = u.id AND " . Accrual::SQL . "{$acc}), 0) AS accrued,
+                  (SELECT COUNT(*) FROM work_records wr WHERE wr.user_id = u.id AND " . Accrual::SQL . "{$acc}) AS works_count,
                   COALESCE((SELECT SUM(pa.amount) FROM payment_allocations pa JOIN payments p ON p.id = pa.payment_id
                             WHERE p.user_id = u.id AND p.status = 'posted'{$pay}), 0) AS paid,
                   COALESCE((SELECT SUM(fa.amount) FROM financial_adjustments fa WHERE fa.user_id = u.id AND fa.affects_balance = 1{$adj}), 0) AS adjustments
@@ -108,6 +109,8 @@ final class FinanceRepository
             $where[] = 'wr.completed_at < ?';
             $args[] = $f['to_utc'];
         }
+        // Начислением считается только принятая работа (ТЗ 2.1); непринятые в начисления не попадают ни при каком статусе
+        $where[] = "wr.review_status = 'accepted'";
         $status = $f['status'] ?? 'active';
         if ($status === 'voided') {
             $where[] = 'wr.voided_at IS NOT NULL';

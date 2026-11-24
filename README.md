@@ -33,11 +33,14 @@ curl -s http://localhost:8088/api/v1/health
 
 | Метод | Endpoint | Доступ |
 |---|---|---|
-| POST | `/auth/login` · `/auth/logout` · GET `/auth/me` | все / вошедший |
+| POST | `/auth/login` (+ `captcha_id`, `captcha_answer`, если капча включена) · `/auth/logout` · GET `/auth/me` | все / вошедший |
+| GET | `/auth/config` · `/auth/captcha` — настройки страницы входа и новая капча | все (с ограничением частоты) |
+| POST | `/auth/webauthn/login/options`, `/auth/webauthn/login/verify` — вход по биометрии | все |
+| POST, GET, DELETE | `/auth/webauthn/register/options`, `/register/verify` · `/auth/webauthn/credentials` · `/credentials/{id}` — свои устройства | вошедший (только свои) |
 | GET, POST | `/users` · GET, PATCH `/users/{id}` · POST `/users/{id}/deactivate`, `/activate` | owner |
 | GET | `/work-types`, `/work-types/{id}` | owner, director (все виды), master (только активные) |
-| POST, PATCH | `/work-types`, `/work-types/{id}` · POST `/work-types/{id}/deactivate`, `/activate` | owner |
-| POST, GET | `/rates` · GET `/rates/{id}`, `/rates/history`, `/users/{id}/rates` · POST `/rates/{id}/close` | owner |
+| POST, PATCH | `/work-types`, `/work-types/{id}` · POST `/work-types/{id}/deactivate`, `/activate` | director (administrator — только просмотр) |
+| POST, GET | `/rates` · GET `/rates/{id}`, `/rates/history`, `/users/{id}/rates` · POST `/rates/{id}/close` | изменения — director; просмотр — director, owner |
 | POST | `/work-records` (+ заголовок `Idempotency-Key`) | owner, master |
 | GET | `/work-records`, `/work-records/{id}` | owner, director — все; master — только свои |
 | POST | `/work-records/{id}/void` `{"reason":"..."}` | owner |
@@ -46,19 +49,43 @@ curl -s http://localhost:8088/api/v1/health
 | GET | `/photos/{id}[?variant=original]` — выдача файла | owner, director; master — только свои |
 | GET | `/finance/summary` · `/finance/balances` | owner, director |
 | GET | `/finance/accruals` · `/finance/users/{id}` · `/finance/adjustments` | owner, director — все; master — только свои |
-| POST | `/finance/adjustments` — ручная корректировка / начальный остаток | owner |
-| POST, GET | `/payroll-runs` · GET `/payroll-runs/{id}` · POST `/payroll-runs/{id}/confirm`, `/cancel` | изменения — owner; просмотр — owner, director, master (свои подтверждённые) |
-| POST (+`Idempotency-Key`), GET | `/payments` · GET `/payments/{id}`, `/payments/{id}/allocations` | изменения — owner; просмотр — owner, director, master (свои подтверждённые) |
-| PUT | `/payments/{id}/allocations` — изменить распределение черновика | owner |
-| POST | `/payments/{id}/post` · `/payments/{id}/cancel` `{"reason":"..."}` | owner |
+| POST | `/finance/adjustments` — ручная корректировка / начальный остаток | director |
+| POST, GET | `/payroll-runs` · GET `/payroll-runs/{id}` · POST `/payroll-runs/{id}/confirm`, `/cancel` | изменения — director; просмотр — owner, director, master (свои подтверждённые) |
+| POST (+`Idempotency-Key`), GET | `/payments` · GET `/payments/{id}`, `/payments/{id}/allocations` | изменения — director; просмотр — owner, director, master (свои подтверждённые) |
+| PUT | `/payments/{id}/allocations` — изменить распределение черновика | director |
+| POST | `/payments/{id}/post` · `/payments/{id}/cancel` `{"reason":"..."}` | director |
 | GET | `/stats/summary` · `/stats/daily` · `/stats/work-types` · `/stats/users` · `/stats/doors` | owner, director |
 | GET | `/export/pdf/production` · `/pdf/payments` · `/pdf/finance` · `/pdf/photos` | owner, director |
-| GET | `/export/pdf/payroll/{id}` — расчётный лист | owner, director — подтверждённые; master — свой подтверждённый; черновик — только owner |
+| GET | `/export/pdf/payroll/{id}` — расчётный лист | owner, director — подтверждённые; master — свой подтверждённый; черновик — только director |
 | GET | `/export/csv` · `/export/xlsx` (`dataset=...`) | owner, director |
 | DELETE | `/photos/{id}` `{"reason":"..."}` — только фото аннулированной работы, мягкое | owner (право `photos.delete`) |
 | GET | `/doors` · `/doors/{id}` · `/doors/{id}/history` | owner, director |
 | GET | `/doors/number/{номер}` | owner, director (полная карточка), master (краткая) |
 | POST | `/doors` (ручное создание) | owner |
+
+### Работа без интернета (смартфон)
+Приложение (PWA) открывается без связи: service worker кэширует страницу, скрипты, стили и иконки (файлы с `?v=N` неизменяемы, новая версия — новый адрес). Запросы `/api/` не кэшируются никогда.
+
+Без связи доступны **главная и регистрация работы** (для роли с правом `work.register`). Регистрация сохраняется **черновиком** в IndexedDB телефона (поля, фото, `Idempotency-Key`). Черновик — не работа и **не создаёт начисление**: работа считается выполненной только после успешного сохранения на сервере (ТЗ 10.3). При появлении связи приложение проверяет сессию (`/auth/me`) и отправляет черновики по очереди с тем же ключом, поэтому повтор не создаёт дубль. Остальные разделы без связи показывают заглушку: деньги и списки на телефоне не хранятся. Сохраняются только профиль и права (без CSRF-токена; до 30 дней) и список активных видов работ.
+
+Правила отправки:
+- ответ сервера 4xx (например, не назначена расценка) → черновик помечается «отклонена» с причиной и **не** пересылается автоматически; пользователь исправляет причину и жмёт «Повторить»;
+- 401 (сессия истекла) → вход; черновики остаются и уходят после входа;
+- сервер хранит ключ идемпотентности 24 часа. Если предыдущая попытка могла дойти до сервера, а прошло больше 20 часов, автоповтор не выполняется (риск дубля, особенно «новой двери») — нужна проверка человеком («Отправить всё равно» или «Удалить»);
+- **дата выполнения и расценка определяются сервером в момент отправки** (`completed_at` задаёт только сервер); в комментарий добавляется пометка «Оформлено без связи на устройстве: …»;
+- загрузка обрывается сразу при потере связи и после 45 секунд без передачи данных, работа сохраняется черновиком.
+
+Ограничения: отправка выполняется, пока приложение открыто (iOS не позволяет фоновую отправку); iOS может очистить кэш PWA, которым не пользовались неделю.
+
+### Капча и вход по биометрии
+**Капча** при входе по паролю рисуется на сервере (GD), внешних сервисов нет; ответ хранится только в виде хэша, каждая картинка одноразовая и живёт 5 минут. Режим задаётся в `.env`: `CAPTCHA_MODE=always` (по умолчанию) | `after_failures` (после двух неудачных попыток с этого IP) | `off`. Капча проверяется до любых обращений к паролям, поэтому без неё перебор невозможен; ограничение попыток входа сохраняется.
+
+**Вход по биометрии** (отпечаток, лицо, Windows Hello) — стандарт WebAuthn: биометрию проверяет само устройство, на сервер приходит только подпись, хранится открытый ключ (алгоритм ES256). Работает только по HTTPS. Чтобы включить, задайте в `.env` домен и адрес сайта точно как в браузере и пересоздайте контейнер:
+```
+WEBAUTHN_RP_ID=door.example.ru
+WEBAUTHN_ORIGIN=https://door.example.ru
+```
+Пользователь включает биометрию сам на главной странице (карточка «Вход по отпечатку или лицу»), до 5 устройств; отключить можно там же. Вход по биометрии не требует пароля и капчи, но подтверждение пользователя (UV) обязательно; счётчик подписей защищает от клонирования ключа. Таблицы: `auth_challenges` (одноразовые вызовы), `webauthn_credentials` (открытые ключи, мягкий отзыв). Все события пишутся в журнал действий.
 
 ### Регистрация работы (multipart/form-data, фото обязательно)
 ```
@@ -70,6 +97,13 @@ Content-Type: multipart/form-data
 Стоимость вводить нельзя: расценка исполнителя определяется на момент выполнения, сумма = количество × расценка (decimal, без float).
 Ошибки: `PHOTO_REQUIRED`, `PHOTO_INVALID`, `PHOTO_TOO_LARGE`, `DUPLICATE_PHOTO`, `RATE_NOT_FOUND`, `DUPLICATE_WORK`, `DOOR_REQUIRED`, `DOOR_NOT_FOUND`, `WORK_TYPE_INACTIVE`, `IDEMPOTENCY_KEY_REUSED`.
 Повтор запроса с тем же ключом и теми же файлами возвращает прежний результат (заголовок `Idempotent-Replay: true`) без повторной обработки.
+
+### Несколько видов работ за одну регистрацию (интерфейс)
+В форме «Регистрация работы» можно добавить несколько видов работ на одну дверь (например, ремонт и упаковку). API при этом не менялся: каждый вид работы — **отдельный** запрос `POST /work-records` со своим `Idempotency-Key`, своими количеством, расценкой и обязательными фотографиями (фото у каждой работы свои). Один вид работы — не более одного раза за набор.
+- Новая дверь: первый запрос (всегда для вида работы, у которого дверь обязательна) отправляется с `new_door=true`, остальные — с `door_number` из ответа на первый. Так набор создаёт ровно одну дверь.
+- Это не одна транзакция: работы сохраняются независимо (ТЗ 4.2). Если по одной работе сервер ответил ошибкой (например, `RATE_NOT_FOUND`), остальные сохраняются, а исправленная отправляется повторно кнопкой «Повторить» — уже сохранённые повторно не отправляются.
+- Без связи набор сохраняется группой черновиков (`fields.group`): первый черновик (`door_mode: 'new'`) создаёт дверь при отправке, остальные (`door_mode: 'follow'`) ждут её номер и уходят на ту же дверь. Работа, у которой первый черновик отклонён или удалён, остаётся в очереди с пояснением.
+- Тесты без браузера: `node tests/js/offline-group.test.js`, `node tests/js/register-multi.test.js` (используют упрощённые заглушки IndexedDB и DOM).
 
 ### Фотографии
 - Форматы JPEG, PNG, WebP; до 15 МБ и до 40 Мп; до 10 файлов за запрос, до 20 на работу. Тип определяется **по содержимому**, а не по расширению.

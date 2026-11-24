@@ -72,7 +72,7 @@ final class ExportService
         $rows = [];
         $sum = '0.00';
         if (!$f['door_missing']) {
-            $filters = ['status' => $status, 'order' => 'asc', 'from_utc' => $f['from_utc'], 'to_utc' => $f['to_utc']];
+            $filters = ['status' => $status, 'review_status' => 'accepted', 'order' => 'asc', 'from_utc' => $f['from_utc'], 'to_utc' => $f['to_utc']];
             foreach (['user_id', 'work_type_id', 'door_id'] as $k) {
                 if ($f[$k] !== null) {
                     $filters[$k] = $f[$k];
@@ -103,7 +103,7 @@ final class ExportService
             ['key' => 'total_amount', 'title' => 'Сумма начисления', 'type' => 'money'], ['key' => 'status', 'title' => 'Статус', 'type' => 'text'],
             ['key' => 'comment', 'title' => 'Комментарий', 'type' => 'text'], ['key' => 'photos_count', 'title' => 'Фото', 'type' => 'int'],
         ];
-        return new Dataset('Выполненные работы', $cols, $rows, ['total_amount' => $sum], $this->meta('Выполненные работы', $f, ['Статус записей: ' . $status, 'Итог — только по действующим работам']));
+        return new Dataset('Выполненные работы', $cols, $rows, ['total_amount' => $sum], $this->meta('Выполненные работы', $f, ['Статус записей: ' . $status, 'Только принятые директором работы; итог — только по действующим работам']));
     }
 
     private function paymentsSet(array $f, string $status): Dataset

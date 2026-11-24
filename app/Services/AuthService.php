@@ -38,11 +38,23 @@ final class AuthService
         ];
     }
 
-    public function login(string $username, string $password, string $ip): array
+    public function login(string $username, string $password, string $ip, ?string $captchaId = null, ?string $captchaAnswer = null): array
     {
         $username = trim($username);
         if ($username === '' || $password === '') {
             throw new ApiException('VALIDATION_ERROR', 'Укажите логин и пароль', 422);
+        }
+
+        // Капча проверяется до любых обращений к пользователям и паролям: без неё перебор невозможен.
+        $captcha = new CaptchaService();
+        if ($captcha->required($ip)) {
+            if ($captchaId === null || $captchaId === '' || $captchaAnswer === null || trim($captchaAnswer) === '') {
+                throw new ApiException('CAPTCHA_REQUIRED', 'Введите символы с картинки', 422);
+            }
+            if (!$captcha->verify($captchaId, $captchaAnswer)) {
+                $this->audit->log(null, 'auth.captcha_failed', 'user', null, null, ['username' => $username], null, $ip);
+                throw new ApiException('CAPTCHA_INVALID', 'Неверные символы с картинки. Попробуйте ещё раз.', 422);
+            }
         }
 
         $byUser = $this->attempts->failuresByUsername($username, LoginThrottle::WINDOW_MINUTES);
@@ -81,6 +93,16 @@ final class AuthService
             $this->users->update((int) $row['id'], ['password_hash' => PasswordHasher::hash($password)]);
         }
 
+        return $this->startSession($row, $ip, null);
+    }
+
+    /**
+     * Открывает сессию пользователя (общий шаг для входа по паролю и по биометрии):
+     * новый идентификатор сессии против фиксации, новый CSRF-токен, запись в аудит.
+     * @param array|null $auditDetails дополнительные сведения для журнала (например, способ входа)
+     */
+    public function startSession(array $row, string $ip, ?array $auditDetails): array
+    {
         Session::start();
         session_regenerate_id(true);               // защита от фиксации сессии
         $_SESSION['user_id'] = (int) $row['id'];
@@ -88,7 +110,7 @@ final class AuthService
         Csrf::rotate();
         self::$resolved = false;
 
-        $this->audit->log((int) $row['id'], 'auth.login', 'user', (int) $row['id'], null, null, null, $ip);
+        $this->audit->log((int) $row['id'], 'auth.login', 'user', (int) $row['id'], null, $auditDetails, null, $ip);
         return $this->payload($row);
     }
 

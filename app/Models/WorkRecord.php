@@ -30,6 +30,15 @@ final class WorkRecord
             'voided_at'    => Dates::toIso($r['voided_at']),
             'voided_by'    => $r['voided_by'] === null ? null : ['id' => (int) $r['voided_by'], 'full_name' => $r['voided_by_name']],
             'void_reason'  => $r['void_reason'],
+            // Приёмка директором (ТЗ 2.1): pending — ждёт приёмки, accepted — принята, rejected — не принята
+            'review'       => [
+                'status'          => $r['review_status'],
+                'reviewed_at'     => Dates::toIso($r['reviewed_at']),
+                'reviewed_by'     => $r['reviewed_by'] === null ? null : ['id' => (int) $r['reviewed_by'], 'full_name' => $r['reviewed_by_name']],
+                'reject_reason'   => $r['reject_reason'],
+                'can_fix'         => $r['can_fix'] === null ? null : (bool) (int) $r['can_fix'],
+                'resubmit_count'  => (int) $r['resubmit_count'],
+            ],
         ];
     }
 }

@@ -132,7 +132,7 @@ final class PaymentRepository
         $ids = array_values(array_unique(array_map('intval', $ids)));
         sort($ids);
         $in = implode(',', $ids);
-        $rows = Database::pdo()->query("SELECT id, user_id, total_amount, voided_at FROM work_records WHERE id IN ({$in}) ORDER BY id FOR UPDATE")->fetchAll();
+        $rows = Database::pdo()->query("SELECT id, user_id, total_amount, voided_at, review_status FROM work_records WHERE id IN ({$in}) ORDER BY id FOR UPDATE")->fetchAll();
         $out = [];
         foreach ($rows as $r) {
             $out[(int) $r['id']] = $r;

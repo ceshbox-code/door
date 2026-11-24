@@ -1,7 +1,9 @@
 <?php
 declare(strict_types=1);
 
+use App\Controllers\AuditController;
 use App\Controllers\AuthController;
+use App\Controllers\WebAuthnController;
 use App\Controllers\DoorController;
 use App\Controllers\ExportController;
 use App\Controllers\FinanceController;
@@ -29,6 +31,8 @@ return static function (Router $router): void {
     $pays = new PaymentController();
     $stat = new StatsController();
     $exp = new ExportController();
+    $audit = new AuditController();
+    $webauthn = new WebAuthnController();
     $view = ['finance.view_all', 'finance.view_own'];     // исполнитель видит только своё — проверка в сервисах
 
     // Проверка работоспособности (без входа; без внутренних подробностей)
@@ -47,6 +51,16 @@ return static function (Router $router): void {
     $router->post('/api/v1/auth/login',  [$auth, 'login']);
     $router->post('/api/v1/auth/logout', Guard::auth([$auth, 'logout']));
     $router->get('/api/v1/auth/me',      Guard::auth([$auth, 'me']));
+    // Страница входа: настройки капчи/биометрии и сама капча (публично, с ограничением частоты)
+    $router->get('/api/v1/auth/config',  [$auth, 'config']);
+    $router->get('/api/v1/auth/captcha', [$auth, 'captcha']);
+    // Вход по биометрии (WebAuthn): без пароля; управление ключами — только вошедшему пользователю и только своими
+    $router->post('/api/v1/auth/webauthn/login/options',    [$webauthn, 'loginOptions']);
+    $router->post('/api/v1/auth/webauthn/login/verify',     [$webauthn, 'loginVerify']);
+    $router->post('/api/v1/auth/webauthn/register/options', Guard::auth([$webauthn, 'registerOptions']));
+    $router->post('/api/v1/auth/webauthn/register/verify',  Guard::auth([$webauthn, 'registerVerify']));
+    $router->get('/api/v1/auth/webauthn/credentials',       Guard::auth([$webauthn, 'credentials']));
+    $router->delete('/api/v1/auth/webauthn/credentials/{id}', Guard::auth([$webauthn, 'revoke']));
 
     // 12.2 Пользователи — только администратор
     $router->get('/api/v1/users',                    Guard::auth([$users, 'index'],      'users.manage'));
@@ -72,18 +86,22 @@ return static function (Router $router): void {
     $router->post('/api/v1/work-types/{id}/activate',   Guard::auth([$types, 'activate'],   'work_types.manage'));
 
     // 12.5 Расценки (в объёме, необходимом для регистрации работ; остальное — этап 5)
-    $router->get('/api/v1/rates',                     Guard::auth([$rates, 'index'],   'rates.manage'));
+    $router->get('/api/v1/rates',                     Guard::auth([$rates, 'index'],   'rates.view'));
     $router->post('/api/v1/rates',                    Guard::auth([$rates, 'store'],   'rates.manage'));
-    $router->get('/api/v1/rates/history',             Guard::auth([$rates, 'history'], 'rates.manage'));
-    $router->get('/api/v1/rates/{id}',                Guard::auth([$rates, 'show'],    'rates.manage'));
+    $router->get('/api/v1/rates/history',             Guard::auth([$rates, 'history'], 'rates.view'));
+    $router->get('/api/v1/rates/{id}',                Guard::auth([$rates, 'show'],    'rates.view'));
     $router->post('/api/v1/rates/{id}/close',         Guard::auth([$rates, 'close'],   'rates.manage'));
-    $router->get('/api/v1/users/{id}/rates',          Guard::auth([$rates, 'forUser'], 'rates.manage'));
+    $router->get('/api/v1/users/{id}/rates',          Guard::auth([$rates, 'forUser'], 'rates.view'));
 
     // 12.6 Выполненные работы (исполнитель видит только свои — проверка в сервисе)
     $router->post('/api/v1/work-records',             Guard::auth([$works, 'store'],  'work.register'));
     $router->get('/api/v1/work-records',              Guard::auth([$works, 'index'],  ['work.view_own', 'work.view_all']));
     $router->get('/api/v1/work-records/{id}',         Guard::auth([$works, 'show'],   ['work.view_own', 'work.view_all']));
     $router->post('/api/v1/work-records/{id}/void',   Guard::auth([$works, 'void'],   'work.void'));
+    // Приёмка директором (ТЗ 2.1); исправление отклонённой работы — владелец (проверка в сервисе)
+    $router->post('/api/v1/work-records/{id}/accept', Guard::auth([$works, 'accept'], 'work.review'));
+    $router->post('/api/v1/work-records/{id}/reject', Guard::auth([$works, 'reject'], 'work.review'));
+    $router->post('/api/v1/work-records/{id}/resubmit', Guard::auth([$works, 'resubmit'], 'work.register'));
 
     $router->get('/api/v1/work-records/{id}/photos',  Guard::auth([$photos, 'forRecord'], ['photos.view', 'work.view_own']));
 
@@ -117,6 +135,9 @@ return static function (Router $router): void {
     // 12.9 Статистика — администратор и директор
     $router->get('/api/v1/stats/summary',     Guard::auth([$stat, 'summary'],   'stats.view'));
     $router->get('/api/v1/stats/daily',       Guard::auth([$stat, 'daily'],     'stats.view'));
+    // Журнал действий (ТЗ 11.11) — только администратор, только чтение
+    $router->get('/api/v1/audit-log', Guard::auth([$audit, 'index'], 'audit.view'));
+
     $router->get('/api/v1/stats/work-types',  Guard::auth([$stat, 'workTypes'], 'stats.view'));
     $router->get('/api/v1/stats/users',       Guard::auth([$stat, 'users'],     'stats.view'));
     $router->get('/api/v1/stats/doors',       Guard::auth([$stat, 'doors'],     'stats.view'));

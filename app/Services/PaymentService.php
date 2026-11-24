@@ -294,6 +294,10 @@ final class PaymentService
             if ($rec['voided_at'] !== null) {
                 throw new ApiException('ALLOCATION_VOIDED', "Работа №{$rid} аннулирована, выплачивать за неё нельзя. Измените распределение.", 409, ['work_record_id' => $rid]);
             }
+            // Оплачивать можно только принятые директором работы (ТЗ 2.1): последняя линия защиты при проведении выплаты
+            if ($rec['review_status'] !== 'accepted') {
+                throw new ApiException('ALLOCATION_NOT_ACCEPTED', "Работа №{$rid} не принята директором, выплачивать за неё нельзя. Измените распределение.", 409, ['work_record_id' => $rid]);
+            }
             if ($runId !== null && !$this->payroll->isActiveItem($runId, $rid)) {
                 throw new ApiException('ALLOCATION_NOT_IN_RUN', "Работа №{$rid} не входит в расчёт этой выплаты", 422, ['work_record_id' => $rid]);
             }

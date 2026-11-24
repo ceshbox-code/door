@@ -17,6 +17,13 @@ return [
         'cookie_secure' => $env('SESSION_SECURE', '1') === '1',
         'idle_minutes'  => (int) $env('SESSION_IDLE_MINUTES', '720'),
     ],
+    'auth' => [
+        // Капча при входе по паролю: always (по умолчанию) | after_failures | off
+        'captcha_mode'    => $env('CAPTCHA_MODE', 'always'),
+        // Вход по биометрии (WebAuthn): домен и адрес сайта, как их видит браузер. Пусто — функция выключена.
+        'webauthn_rp_id'  => $env('WEBAUTHN_RP_ID', ''),
+        'webauthn_origin' => $env('WEBAUTHN_ORIGIN', ''),
+    ],
     'db' => [
         'host'     => $env('DB_HOST', 'door-db'),
         'port'     => (int) $env('DB_PORT', '3306'),

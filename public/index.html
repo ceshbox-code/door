@@ -2,19 +2,31 @@
 <html lang="ru">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#1f3a5f">
-  <link rel="manifest" href="/manifest.json">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="DOOR" />
+  <link rel="icon" type="image/png" href="/images/favico/favicon-96x96.png" sizes="96x96" />
+  <link rel="icon" type="image/svg+xml" href="/images/favico/favicon.svg" />
+  <link rel="shortcut icon" href="/images/favico/favicon.ico" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/images/favico/apple-touch-icon.png" />
+  <link rel="manifest" href="/images/favico/site.webmanifest" />
+  <link rel="stylesheet" href="/css/app.css?v=22">
   <title>Учёт дверей</title>
 </head>
 <body>
-  <h1>Учёт дверей</h1>
-  <p id="status">Проверка соединения…</p>
-  <script>
-    fetch('/api/v1/health').then(r => r.json()).then(j => {
-      document.getElementById('status').textContent =
-        j.success ? 'Сервер работает, база данных доступна.' : 'Ошибка: база данных недоступна.';
-    }).catch(() => { document.getElementById('status').textContent = 'Сервер не отвечает.'; });
-  </script>
+  <div id="app"><p style="padding:1rem">Загрузка…</p></div>
+  <noscript>Для работы приложения нужен JavaScript.</noscript>
+  <script src="/js/api.js?v=22"></script>
+  <script src="/js/ui.js?v=22"></script>
+  <script src="/js/roles.js?v=22"></script>
+  <script src="/js/webauthn.js?v=22"></script>
+  <script src="/js/offline.js?v=22"></script>
+  <script src="/js/views.js?v=22"></script>
+  <script src="/js/finance.js?v=22"></script>
+  <script src="/js/audit.js?v=22"></script>
+  <script src="/js/executors.js?v=22"></script>
+  <script src="/js/app.js?v=22"></script>
 </body>
 </html>
