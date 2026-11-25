@@ -96,6 +96,7 @@ return static function (Router $router): void {
     // 12.6 Выполненные работы (исполнитель видит только свои — проверка в сервисе)
     $router->post('/api/v1/work-records',             Guard::auth([$works, 'store'],  'work.register'));
     $router->get('/api/v1/work-records',              Guard::auth([$works, 'index'],  ['work.view_own', 'work.view_all']));
+    $router->get('/api/v1/work-records/pending-count', Guard::auth([new \App\Controllers\ReviewCountController(), 'pendingCount'], 'work.review'));  // счётчик приёмки (только director)
     $router->get('/api/v1/work-records/{id}',         Guard::auth([$works, 'show'],   ['work.view_own', 'work.view_all']));
     $router->post('/api/v1/work-records/{id}/void',   Guard::auth([$works, 'void'],   'work.void'));
     // Приёмка директором (ТЗ 2.1); исправление отклонённой работы — владелец (проверка в сервисе)

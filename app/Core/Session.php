@@ -45,7 +45,11 @@ final class Session
             $_SESSION = [];
             session_regenerate_id(true);
         }
-        $_SESSION['last_activity'] = $now;
+        // Фоновый опрос счётчика (заголовок X-Door-Poll: 1) не продлевает сессию: иначе открытая вкладка
+        // директора не давала бы сессии истечь по таймауту простоя.
+        if ((string) ($_SERVER['HTTP_X_DOOR_POLL'] ?? '') !== '1') {
+            $_SESSION['last_activity'] = $now;
+        }
     }
 
     public static function destroy(): void
