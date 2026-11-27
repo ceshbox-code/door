@@ -60,6 +60,78 @@
     return close;
   }
 
+  /** Просмотр фотографий в модальном окне поверх приложения (без перехода на другую страницу).
+   *  photos: [{ src, fallback?, alt? }]; start — номер фото. Закрытие: кнопка «Закрыть», Esc, клик по фону.
+   *  Стрелки на клавиатуре и свайп листают фото. Возвращает функцию закрытия. */
+  function photoViewer(photos, start) {
+    const list = (photos || []).filter(p => p && p.src);
+    if (!list.length) return () => {};
+    let i = Math.min(Math.max(start || 0, 0), list.length - 1);
+    const opener = document.activeElement;
+    const many = list.length > 1;
+
+    const img = h('img', { class: 'pv-img', alt: '' });
+    const status = h('div', { class: 'pv-status', role: 'status' });
+    const count = h('div', { class: 'pv-count' });
+    const closeBtn = h('button', { type: 'button', class: 'pv-btn pv-close', 'aria-label': 'Закрыть просмотр фото', onclick: () => close() }, '✕ Закрыть');
+    const prevBtn = many ? h('button', { type: 'button', class: 'pv-btn pv-nav pv-prev', 'aria-label': 'Предыдущее фото', onclick: () => go(-1) }, '‹') : null;
+    const nextBtn = many ? h('button', { type: 'button', class: 'pv-btn pv-nav pv-next', 'aria-label': 'Следующее фото', onclick: () => go(1) }, '›') : null;
+    const stage = h('div', { class: 'pv-stage' }, img, status);
+    const box = h('div', { class: 'pv', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Просмотр фото',
+      onclick: ev => { if (ev.target === box || ev.target === stage) close(); } },
+      stage, count, closeBtn, prevBtn, nextBtn);
+
+    function show() {
+      const p = list[i];
+      let triedFallback = false;
+      status.textContent = 'Загрузка…';
+      status.classList.remove('pv-err');
+      img.classList.add('pv-loading');
+      img.alt = p.alt || 'Фото';
+      img.onload = () => { status.textContent = ''; img.classList.remove('pv-loading'); };
+      img.onerror = () => {
+        if (p.fallback && !triedFallback && img.getAttribute('src') !== p.fallback) { triedFallback = true; img.src = p.fallback; return; }
+        img.classList.add('pv-loading');
+        status.textContent = 'Не удалось загрузить фото';
+        status.classList.add('pv-err');
+      };
+      img.src = p.src;
+      count.textContent = many ? (i + 1) + ' / ' + list.length : '';
+    }
+    function go(d) { if (!many) return; i = (i + d + list.length) % list.length; show(); }
+
+    function onKey(ev) {
+      if (ev.key === 'Escape') { ev.stopPropagation(); ev.preventDefault(); close(); return; }   // не закрываем окно под фото
+      if (ev.key === 'ArrowLeft') { ev.stopPropagation(); go(-1); return; }
+      if (ev.key === 'ArrowRight') { ev.stopPropagation(); go(1); return; }
+      if (ev.key === 'Tab') {                                                                       // фокус остаётся внутри просмотрщика
+        const f = [closeBtn, prevBtn, nextBtn].filter(Boolean);
+        const at = f.indexOf(document.activeElement);
+        ev.preventDefault();
+        f[(at + (ev.shiftKey ? -1 : 1) + f.length) % f.length].focus();
+      }
+    }
+    let x0 = null, y0 = 0;
+    stage.addEventListener('touchstart', ev => { if (ev.touches.length === 1) { x0 = ev.touches[0].clientX; y0 = ev.touches[0].clientY; } else x0 = null; }, { passive: true });
+    stage.addEventListener('touchend', ev => {
+      if (x0 === null || !ev.changedTouches.length) return;
+      const dx = ev.changedTouches[0].clientX - x0, dy = ev.changedTouches[0].clientY - y0;
+      x0 = null;
+      if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) go(dx < 0 ? 1 : -1);
+    }, { passive: true });
+
+    function close() {
+      window.removeEventListener('keydown', onKey, true);
+      box.remove();
+      if (opener && opener.isConnected && typeof opener.focus === 'function') { try { opener.focus(); } catch (e) { /* не критично */ } }
+    }
+    window.addEventListener('keydown', onKey, true);   // capture на window: срабатывает раньше обработчиков Esc у окон под фото
+    document.body.appendChild(box);
+    show();
+    closeBtn.focus();
+    return close;
+  }
+
   function pager(page, per, total, go) {
     const pages = Math.max(1, Math.ceil(total / per));
     if (pages <= 1) return h('div');
@@ -112,5 +184,5 @@
     return local + ':00' + off;
   }
 
-  w.UI = { TZ, localToIso, h, add, clear, money, qty, dt, day, alert, errBox, modal, pager, uuid, periodPicker, PERIODS };
+  w.UI = { TZ, localToIso, h, add, clear, money, qty, dt, day, alert, errBox, modal, photoViewer, pager, uuid, periodPicker, PERIODS };
 })(window);

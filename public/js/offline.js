@@ -118,9 +118,26 @@
   const onChange = fn => { subs.push(fn); return () => { const i = subs.indexOf(fn); if (i >= 0) subs.splice(i, 1); }; };
   function notify() { subs.forEach(fn => { try { fn(); } catch (e) { /* см. выше */ } }); }
 
-  function buildForm(d, doorNumber) {
+  /** Вид работы черновика. Черновики, созданные старыми версиями приложения, могли хранить его под другим именем
+      или без числового id (тогда сервер отвечал «Выберите вид работы»). Берём id из известных полей,
+      а если его нет — ищем вид по названию в сохранённом на телефоне справочнике. */
+  const posInt = v => { const n = Number(v); return Number.isInteger(n) && n > 0 ? n : null; };
+  async function resolveTypeId(d) {
+    const f = d.fields || {};
+    for (const k of ['work_type_id', 'workTypeId', 'type_id', 'typeId', 'work_type']) {
+      const v = f[k] && typeof f[k] === 'object' ? f[k].id : f[k];
+      if (posInt(v)) return posInt(v);
+    }
+    const name = (f.work_type_name || '').trim().toLowerCase();
+    if (!name) return null;
+    const list = (await cachedWorkTypes()) || [];
+    const hit = list.filter(t => String(t.name).trim().toLowerCase() === name);
+    return hit.length === 1 ? posInt(hit[0].id) : null;
+  }
+
+  function buildForm(d, doorNumber, typeId) {
     const f = d.fields, fd = new FormData();
-    fd.append('work_type_id', String(f.work_type_id));
+    fd.append('work_type_id', String(typeId));
     if (f.door_mode === 'new') fd.append('new_door', 'true');
     if (f.door_mode === 'existing' && f.door_number) fd.append('door_number', f.door_number);
     if (f.door_mode === 'follow' && doorNumber) fd.append('door_number', doorNumber);
@@ -132,11 +149,16 @@
   }
 
   // ------------------------------------------------------------------ отправка очереди
-  let syncing = false;
+  let syncing = false, syncNote = '';
   /** Отправляет черновики по очереди. Возвращает {sent, left}. Не вызывать без связи и без проверенной сессии. */
   async function sync(ctx, opts) {
     opts = opts || {};
-    if (syncing || !ctx.user || ctx.offline || !Net.online) return { sent: 0, left: await countDrafts(ctx.user && ctx.user.id) };
+    if (syncing || !ctx.user || ctx.offline || !Net.online) {
+      syncNote = syncing ? 'Отправка уже идёт.' : ctx.offline || !Net.online ? 'Отправка не запущена: нет подтверждённой связи с сервером.' : 'Отправка не запущена: нет сессии.';
+      notify();
+      return { sent: 0, left: await countDrafts(ctx.user && ctx.user.id) };
+    }
+    syncNote = '';
     syncing = true; let sent = 0;
     try {
       const drafts = await listDrafts(ctx.user.id);
@@ -158,12 +180,20 @@
             await putDraft(d); continue;
           }
         }
+        const typeId = await resolveTypeId(d);
+        d.lastTry = { at: Date.now(), typeId: typeId || null, result: 'не определён вид работы' };
+        if (!typeId) {            // без вида работы запрос заведомо будет отклонён: на сервер не отправляем
+          d.status = 'rejected'; d.error = 'В этой работе не сохранён вид работы (черновик создан старой версией приложения). Удалите её и зарегистрируйте заново.';
+          await putDraft(d); continue;
+        }
+        if (d.fields.work_type_id !== typeId) d.fields.work_type_id = typeId;
         d.status = 'sending'; d.attemptedAt = d.attemptedAt || Date.now(); await putDraft(d);
         try {
-          const rec = await Api.upload('/work-records', buildForm(d, doorNumber), { 'Idempotency-Key': d.key });
+          const rec = await Api.upload('/work-records', buildForm(d, doorNumber, typeId), { 'Idempotency-Key': d.key });
           if (d.fields.door_mode === 'new' && d.fields.group && rec && rec.door && rec.door.number) await metaSet('group:' + d.fields.group, rec.door.number);
           await deleteDraft(d.id); sent++;
         } catch (e) {
+          d.lastTry = { at: Date.now(), typeId, result: e.code === 'NETWORK' ? 'нет связи' : 'ответ сервера ' + (e.status || '') + ' ' + (e.code || '') };
           if (e.code === 'NETWORK') { d.status = 'pending'; d.error = null; await putDraft(d); break; }       // связь пропала — остальное позже
           if (e.status === 401) { d.status = 'pending'; await putDraft(d); break; }                           // сессия истекла — после входа продолжим
           if (e.status >= 500 || e.status === 429 || e.status === 409) { d.status = 'pending'; d.error = e.full ? e.full() : e.message; await putDraft(d); break; }
@@ -195,20 +225,22 @@
     const size = drafts.reduce((s, d) => s + d.photos.reduce((a, p) => a + (p.blob.size || 0), 0), 0);
     box.appendChild(h('h2', { style: 'margin-top:0' }, 'Не отправлено на сервер: ' + drafts.length));
     box.appendChild(h('p', { class: 'muted' }, 'Эти работы сохранены только на телефоне и ещё НЕ учтены в начислениях. ' +
-      (ctx.offline ? 'Они отправятся автоматически, когда появится интернет и приложение будет открыто.' : 'Нажмите «Отправить», если отправка не началась сама.') + ' Занято: ' + mb(size) + '.'));
+      (ctx.offline ? 'Они отправятся автоматически, когда появится интернет и приложение будет открыто.' : 'Нажмите «Отправить сейчас», если отправка не началась сама.') + ' Занято: ' + mb(size) + '.'));
     drafts.forEach(d => {
       const f = d.fields, st = h('span', { class: 'tag ' + (d.status === 'rejected' || d.status === 'needs_check' ? 'void' : '') }, STATUS[d.status] || d.status);
       const row = h('div', { class: 'draft', 'data-status': d.status },
         h('div', {}, h('strong', {}, f.work_type_name), ' · ', doorText(f), ' · ', f.quantity + ' ' + (f.unit || ''), ' · фото: ' + d.photos.length),
         h('div', { class: 'muted' }, dt(new Date(d.createdAt).toISOString()), ' ', st),
         d.error ? h('div', { class: 'alert err' }, d.error) : null);
-      const act = h('div', { class: 'row', style: 'margin-top:.4rem' });
-      if (d.status === 'rejected') act.appendChild(h('button', { class: 'btn secondary', type: 'button', onclick: async () => { await retry(d); w.dispatchEvent(new Event('door-drafts-retry')); } }, 'Повторить отправку'));
+      const act = h('div', { class: 'row', style: 'margin-top:.4rem;flex-wrap:nowrap' });
       if (d.status === 'needs_check') act.appendChild(h('button', { class: 'btn secondary', type: 'button', onclick: async () => { await retry(d, UI.uuid()); w.dispatchEvent(new Event('door-drafts-retry')); } }, 'Отправить всё равно'));
-      act.appendChild(h('button', { class: 'btn secondary', type: 'button', onclick: () => confirmDelete(d) }, 'Удалить'));
-      row.appendChild(act); box.appendChild(row);
+      else if (!ctx.offline) act.appendChild(h('button', { class: 'btn', type: 'button', onclick: async () => { for (const x of await listDrafts(ctx.user.id)) if (x.status === 'rejected') await retry(x); w.dispatchEvent(new Event('door-drafts-retry')); } }, 'Отправить сейчас'));
+      act.appendChild(h('button', { class: 'btn secondary', type: 'button', style: 'color:var(--bad);border-color:var(--bad)', onclick: () => confirmDelete(d) }, 'Удалить'));
+      row.appendChild(act);
+      if (d.lastTry) row.appendChild(h('div', { class: 'muted', style: 'font-size:.8rem;margin-top:.3rem' }, 'Последняя попытка ' + dt(new Date(d.lastTry.at).toISOString()) + ': вид работы № ' + (d.lastTry.typeId || '—') + ', ' + d.lastTry.result));
+      box.appendChild(row);
     });
-    if (!ctx.offline) box.appendChild(h('button', { class: 'btn', type: 'button', id: 'drafts-send', style: 'margin-top:.6rem', onclick: () => w.dispatchEvent(new Event('door-drafts-retry')) }, 'Отправить сейчас'));
+    if (syncNote) box.appendChild(h('div', { class: 'alert err' }, syncNote));
     return box;
   }
   function confirmDelete(d) {

@@ -103,6 +103,7 @@ return static function (Router $router): void {
     $router->post('/api/v1/work-records/{id}/accept', Guard::auth([$works, 'accept'], 'work.review'));
     $router->post('/api/v1/work-records/{id}/reject', Guard::auth([$works, 'reject'], 'work.review'));
     $router->post('/api/v1/work-records/{id}/resubmit', Guard::auth([$works, 'resubmit'], 'work.register'));
+    $router->post('/api/v1/work-records/{id}/edit', Guard::auth([new \App\Controllers\WorkRecordEditController(), 'edit'], 'work.register'));  // изменение своей работы до приёмки
 
     $router->get('/api/v1/work-records/{id}/photos',  Guard::auth([$photos, 'forRecord'], ['photos.view', 'work.view_own']));
 

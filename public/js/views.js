@@ -13,8 +13,9 @@
     Api.get('/work-records/' + recordId + '/photos').then(list => {
       clear(box).classList.remove('muted');
       if (!list.length) { box.textContent = 'Фотографий нет'; box.classList.add('muted'); return; }
-      list.forEach(p => box.appendChild(h('a', { href: p.original_url, target: '_blank', rel: 'noopener' },
-        h('img', { src: p.url, alt: 'Фото к работе', loading: 'lazy' }))));
+      const shots = list.map(p => ({ src: p.url, fallback: p.original_url, alt: 'Фото к работе' }));
+      shots.forEach((shot, idx) => box.appendChild(h('button', { type: 'button', class: 'photo-open', 'aria-label': 'Открыть фото ' + (idx + 1) + ' из ' + shots.length, onclick: () => UI.photoViewer(shots, idx) },
+        h('img', { src: shot.src, alt: shot.alt, loading: 'lazy' }))));
     }).catch(e => { clear(box).appendChild(errBox(e)); });
     return box;
   }

@@ -4,8 +4,8 @@
      поэтому читаем их из кэша мгновенно. Главная страница берётся из сети (таймаут 3 с), иначе из кэша.
    • Запросы /api/ не перехватываются и не кэшируются никогда: деньги, списки и фото всегда только с сервера.
    Версию (V и CACHE) нужно менять при каждом изменении файлов оболочки. */
-const CACHE = 'door-shell-v16';
-const V = '?v=22';
+const CACHE = 'door-shell-v19';
+const V = '?v=25';
 const SHELL = ['/', '/css/app.css' + V, '/js/api.js' + V, '/js/ui.js' + V, '/js/roles.js' + V, '/js/webauthn.js' + V, '/js/offline.js' + V,
   '/js/views.js' + V, '/js/finance.js' + V, '/js/audit.js' + V, '/js/executors.js' + V, '/js/app.js' + V,
   '/images/favico/site.webmanifest', '/images/favico/favicon.svg', '/images/favico/favicon-96x96.png', '/images/favico/favicon.ico',
